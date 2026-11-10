@@ -23,8 +23,15 @@ test("gateway output with empty logprobs replays on a different synthetic resour
     attempts++;
     const body = JSON.parse(request.body);
     if (body.input.some(item => item.id?.endsWith("resource_a"))) return Response.json(error, { status: 400 });
-    if (body.input.some(item => item.role === "assistant" && item.content?.some(part => part.type === "input_text"))) {
-      return Response.json({ error: { message: "Assistant messages require output_text, not input_text." } }, { status: 400 });
+    // Do not give a false green to half-output objects: output_text[] requires
+    // the complete output-message variant. Plain inline replay uses a string.
+    if (body.input.some(item => {
+      if (item.role !== "assistant" || typeof item.content === "string") return false;
+      return item.type !== "message" || typeof item.id !== "string" ||
+        !["in_progress", "completed", "incomplete"].includes(item.status) ||
+        !Array.isArray(item.content) || !item.content.every(part => ["output_text", "refusal"].includes(part.type));
+    })) {
+      return Response.json({ error: { message: "Assistant history must match a complete supported input variant." } }, { status: 400 });
     }
     return Response.json({ output: [] });
   };
@@ -35,7 +42,7 @@ test("gateway output with empty logprobs replays on a different synthetic resour
   assert.equal(attempts, 1);
   assert.equal(JSON.stringify(before), original);
   assert.deepEqual(JSON.parse(result.body), { store: false, input: [
-    { type: "message", role: "assistant", phase: "commentary", content: message().content },
+    { role: "assistant", phase: "commentary", content: message().content[0].text },
     { type: "function_call", call_id: "call_keep", name: "lookup", arguments: '{"id":"nested_keep"}' },
     { type: "function_call_output", call_id: "call_keep", output: '{"id":"result_keep"}' },
   ] });
@@ -80,7 +87,8 @@ for (const role of ["assistant", "user", "system", "developer"]) {
     assert.equal(after.id, undefined);
     assert.equal(after.status, undefined);
     assert.equal(after.phase, item.phase);
-    assert.deepEqual(after.content, role === "assistant" ? item.content : [{ type: "input_text", text: item.content[0].text }]);
+    assert.equal(after.type, role === "assistant" ? undefined : "message");
+    assert.deepEqual(after.content, role === "assistant" ? item.content[0].text : [{ type: "input_text", text: item.content[0].text }]);
     assert.equal(JSON.stringify({ input: [item] }), before);
   });
 }
@@ -97,7 +105,7 @@ test("reasoning state and reference-only items survive adjacent assistant replay
   const result = await prepareResponsesRequest(url, { method: "POST", body: JSON.stringify({ input: [message(), ...state] }) });
   const after = JSON.parse(result.body);
   assert.equal(after.input[0].id, undefined);
-  assert.deepEqual(after.input[0].content, message().content);
+  assert.equal(after.input[0].content, message().content[0].text);
   assert.deepEqual(after.input.slice(1), state);
 });
 
@@ -108,8 +116,9 @@ test("disabling portable replay forwards assistant and reasoning bytes unchanged
   assert.equal(await prepareRequest(url, init, { portableResponses: false }), init);
 });
 
-test("assistant output without an item ID stays byte-identical", async () => {
+test("assistant output without an item ID becomes a valid plain inline message", async () => {
   const item = message(); delete item.id;
   const init = { method: "POST", body: JSON.stringify({ input: [item] }, null, 2) };
-  assert.equal(await prepareResponsesRequest(url, init), init);
+  const after = JSON.parse((await prepareResponsesRequest(url, init)).body);
+  assert.deepEqual(after.input[0], { role: "assistant", phase: item.phase, content: item.content[0].text });
 });

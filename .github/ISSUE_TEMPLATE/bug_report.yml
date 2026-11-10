@@ -1,50 +1,63 @@
 name: 缺陷报告
-description: 提交可复现的问题；请勿公开安全漏洞或敏感数据。
+description: 提交 magpie-agentrouter-plus 的最小复现；不要披露漏洞或敏感数据。
 title: "[Bug] "
 body:
   - type: markdown
     attributes:
       value: |
-        请先查阅 [使用说明](https://github.com/ZhaoJun233/agentrouter-magpie-plugin/blob/master/README.md) 并搜索已有 Issue。
-        安全漏洞请使用 [私密报告渠道](https://github.com/ZhaoJun233/agentrouter-magpie-plugin/security/advisories/new)，不要在此披露。
+        请先查阅 [使用说明](https://github.com/ForsakenDelusion/magpie-agentrouter-plus/blob/main/README.md) 并搜索本仓库已有 Issue。
+        本项目目前私有且未发布 npm 包；请核对实际加载的是本 fork 还是上游旧包。
+        安全漏洞请按 [安全政策](https://github.com/ForsakenDelusion/magpie-agentrouter-plus/blob/main/SECURITY.md) 约定私密渠道，不在此披露。
   - type: input
     id: versions
     attributes:
-      label: 版本与环境
-      description: 插件版本、magpie 版本、Node.js / Python 版本及操作系统；未涉及的组件请注明。
-      placeholder: "插件版本：…；magpie：…；Node.js：…；Python：…；操作系统：…"
+      label: 版本、安装来源与环境
+      description: 本项目版本／commit、本地目录或 tarball、Magpie、Node.js／Python 及 OS；未涉及的组件注明。
+      placeholder: "插件：…；commit：…；安装来源：…；Magpie：…；Node.js：…；Python：…；OS：…"
+    validations:
+      required: true
+  - type: dropdown
+    id: inference_route
+    attributes:
+      label: 模型 API 选择
+      description: 只选设置状态，不粘贴账号配置、真实自定义 URL 或凭据；显式 endpoint/apiBase 会覆盖开关。
+      options:
+        - 国内 CN（use-domestic-api 开启／默认，无显式覆盖）
+        - 国际 INTL（use-domestic-api 关闭，无显式覆盖）
+        - 使用显式 account/provider endpoint/apiBase 覆盖
+        - 未确认／与模型路由无关
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
       label: 最小复现步骤
-      description: 使用合成输入，说明前置条件、相关配置项与稳定复现步骤；不要附真实配置文件或抓包。
+      description: 使用合成输入，说明相关开关、是否含仅引用／不透明历史，以及设置变化是否已发生下一次请求；不要附真实配置或抓包。
       placeholder: |
-        1. 使用的功能与脱敏配置：
-        2. 操作步骤：
-        3. 出现问题的位置：
+        1. 使用的功能与脱敏设置（portable-responses／text-filter 等）：
+        2. 合成输入及操作步骤：
+        3. 出现问题的位置与稳定复现条件：
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
       label: 预期行为
-      description: 说明在保留历史状态与认证边界的前提下，应当发生什么。
+      description: 说明在保留 role/phase、工具／引用历史及认证边界的前提下应发生什么；不以删除历史换取成功。
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
       label: 实际行为
-      description: 说明错误、发生频率及影响；如版本升级后出现，请注明最后正常版本。
+      description: 提供错误码／状态、频率及影响，区分本地拒绝、上游错误与宿主调度；升级后出现时注明最后正常版本。
     validations:
       required: true
   - type: textarea
     id: traces
     attributes:
       label: 脱敏日志与验证证据
-      description: 仅保留必要的错误码、脱敏调用轨迹和测试结果。删除 API Key、Cookie、Token、认证头及用户对话；没有日志请说明。
+      description: 仅保留必要错误码、脱敏轨迹、合成回归结果。删除 key、Cookie、Token、OAuth 回调、认证头、词表和用户对话；未测试或无日志请说明。不要求付费模型测试。
       render: text
     validations:
       required: true
@@ -53,7 +66,7 @@ body:
     attributes:
       label: 提交前确认
       options:
-        - label: 我已搜索已有 Issue，并阅读相关使用说明。
+        - label: 我已搜索本仓库已有 Issue，并阅读相关说明与高级地址覆盖规则。
           required: true
         - label: 我确认未提交真实凭据、Cookie、Token 或用户对话。
           required: true

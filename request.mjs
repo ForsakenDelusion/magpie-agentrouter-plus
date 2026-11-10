@@ -3,15 +3,20 @@ import { readCloneText } from "./body-inspection.mjs";
 
 // Replay complete items inline instead of asking a load-balanced resource to
 // retrieve them by an old item ID. Never remove call_id or opaque contents.
+function isPlainTextPart(part) {
+  if (!part || typeof part !== "object" || !["input_text", "output_text"].includes(part.type) ||
+      typeof part.text !== "string") return false;
+  // Empty annotations/probability arrays add no content; real or unknown
+  // metadata must not be downgraded to plain text.
+  return Object.keys(part).every(key => ["type", "text", "annotations", "logprobs"].includes(key)) &&
+    (!Object.hasOwn(part, "annotations") || Array.isArray(part.annotations) && part.annotations.length === 0) &&
+    (!Object.hasOwn(part, "logprobs") || Array.isArray(part.logprobs) && part.logprobs.length === 0);
+}
+
 function isInlinePart(part) {
   if (!part || typeof part !== "object") return false;
   if (["input_text", "input_image", "input_file", "input_audio"].includes(part.type)) return true;
-  if (part.type !== "output_text" || typeof part.text !== "string") return false;
-  // The gateway also emits logprobs: [] on ordinary completed text. Empty
-  // probability metadata adds no content; populated or unknown data stays intact.
-  return Object.keys(part).every(key => ["type", "text", "annotations", "logprobs"].includes(key)) &&
-    (part.annotations == null || Array.isArray(part.annotations) && part.annotations.length === 0) &&
-    (!Object.hasOwn(part, "logprobs") || Array.isArray(part.logprobs) && part.logprobs.length === 0);
+  return isPlainTextPart(part);
 }
 
 function hasInlineContent(item) {
@@ -21,8 +26,9 @@ function hasInlineContent(item) {
     case "message":
       return ["user", "assistant", "system", "developer"].includes(item.role) &&
         Object.keys(item).every(key => ["type", "id", "role", "content", "status", "phase"].includes(key)) &&
-        (typeof item.content === "string" && item.content.length > 0 ||
-          Array.isArray(item.content) && item.content.length > 0 && item.content.every(isInlinePart));
+        (typeof item.content === "string" && (item.role === "assistant" || item.content.length > 0) ||
+          Array.isArray(item.content) && item.content.length > 0 &&
+            item.content.every(item.role === "assistant" ? isPlainTextPart : isInlinePart));
     case "function_call":
       return typeof item.call_id === "string" && item.call_id.length > 0 &&
         typeof item.name === "string" && item.name.length > 0 && typeof item.arguments === "string";
@@ -36,6 +42,14 @@ function hasInlineContent(item) {
     default:
       return false;
   }
+}
+
+function isServerReference(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  // ItemReference.type is optional in the published input contract. An ID-only
+  // item must keep the entire request attached to its original server context.
+  return item.type === "item_reference" ||
+    (Object.hasOwn(item, "id") && Object.keys(item).every(key => key === "id"));
 }
 
 const MAX_BODY = 4 * 1024 * 1024;
@@ -76,17 +90,31 @@ function replayInline(body) {
   // Pointers carry context we cannot retrieve. Filtering visible prose must not
   // silently discard that context or turn a continuation into a new conversation.
   if (!Array.isArray(body.input) || body.previous_response_id || body.conversation ||
-      body.input.some(item => item?.type === "item_reference")) return false;
+      body.input.some(isServerReference)) return false;
   let changed = false;
   for (const item of body.input) {
-    if (!hasInlineContent(item) || !Object.hasOwn(item, "id")) continue;
-    delete item.id;
-    if (item.type === "message" || item.type == null) {
-      // Output-message input objects require an ID. Convert to the supported
-      // EasyInputMessage form, preserving phase and every actual text segment.
-      // Assistant history keeps output_text and its metadata; other roles use input_text.
+    if (!hasInlineContent(item)) continue;
+    const message = item.type === "message" || item.type == null;
+    if (message && item.role === "assistant") {
+      // A typed output message requires id/status and output_text/refusal. After
+      // removing its resource-local id, serialize proven plain text using the
+      // unambiguous EasyInputMessage content:string form instead of leaving a
+      // half-output object. This also repairs legacy/id-less plain arrays.
+      // Concatenation preserves every character; role and phase stay untouched.
+      if (typeof item.content === "string" &&
+          !["id", "type", "status"].some(key => Object.hasOwn(item, key))) continue;
+      if (Array.isArray(item.content)) item.content = item.content.map(part => part.text).join("");
+      delete item.id;
+      delete item.type;
       delete item.status;
-      if (item.role !== "assistant" && Array.isArray(item.content)) item.content = item.content.map(part =>
+      changed = true;
+      continue;
+    }
+    if (!Object.hasOwn(item, "id")) continue;
+    delete item.id;
+    if (message) {
+      delete item.status;
+      if (Array.isArray(item.content)) item.content = item.content.map(part =>
         part.type === "output_text" ? { type: "input_text", text: part.text } : part);
     }
     changed = true;

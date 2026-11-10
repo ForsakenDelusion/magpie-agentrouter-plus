@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import plugin from "./index.mjs";
 
-const url = "https://example.test/v1/responses";
+const url = "https://agentrouter.org/v1/responses";
 const auth = { type: "api", key: "synthetic-model-key", metadata: {
   githubCookieMode: "configure", githubCookie: "user_session=synthetic-github-cookie; logged_in=yes",
   cookie: "session=synthetic-site-cookie", accessToken: "synthetic-access-token", userId: "123",
@@ -28,7 +28,7 @@ test("login cookies and site token never enter model requests during inline repl
     for (const privateValue of ["synthetic-github-cookie", "synthetic-site-cookie", "synthetic-access-token"])
       assert.equal(wire.includes(privateValue), false);
     assert.equal(JSON.parse(sent.body).input[0].id, enabled ? undefined : "msg_resource_a");
-    assert.deepEqual(JSON.parse(sent.body).input[0].content, JSON.parse(body).input[0].content);
+    assert.deepEqual(JSON.parse(sent.body).input[0].content, enabled ? "Synthetic response" : JSON.parse(body).input[0].content);
   }
   assert.equal(calls.length, 2);
 });

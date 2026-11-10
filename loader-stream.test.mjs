@@ -19,7 +19,7 @@ async function load(response) {
   try {
     const p = await AgentRouterAuthPlugin();
     const l = await p.auth.loader(async () => ({ key: 'sk-example' }), {});
-    return await l.fetch('https://example.invalid/v1/responses', { method: 'POST', body: '{}' });
+    return await l.fetch('https://agentrouter.org/v1/responses', { method: 'POST', body: '{}' });
   } finally { globalThis.fetch = old; }
 }
 

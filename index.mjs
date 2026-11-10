@@ -2,6 +2,7 @@ import { explainResponse } from "./response.mjs";
 import { prepareRequest } from "./request.mjs";
 import { loadTextFilter } from "./content-filter.mjs";
 import { parseGithubCookie } from "./github-cookie.mjs";
+import { resolveApiBase, routeApiURL, requestAtURL, isApiURL, UnsupportedRequestTransportError } from "./endpoints.mjs";
 
 // AgentRouter (agentrouter.org) for magpie / OpenCode.
 //
@@ -44,11 +45,6 @@ import { parseGithubCookie } from "./github-cookie.mjs";
 // cannot determine remaining credit or renew a GitHub login for check-in.
 
 const PROVIDER = "agentrouter";
-
-// The request endpoint: where completions and the model list go. This is the
-// one the user picked, and it stays what they picked even when the site the
-// check-in talks to is the other front door. A site's own API lives under it.
-const ENDPOINT = "https://agentrouter.org";
 
 const SITES = {
   // The vendor runs two front doors for the same accounts. `api` is the
@@ -164,30 +160,25 @@ function applyHeaders(h, extra) {
   return h;
 }
 
-// isURLish says whether a value can be a base URL at all: an http(s) address.
-// The endpoint question is free text, so a key pasted into it — which is what
-// the account manager's first question invites, since it is where the key
-// used to go — lands in the same field as a real address does. Such a value
-// is not an endpoint however it was stored, and building a base out of it
-// sends every request to nothing at all, with no error to show for it.
-function isURLish(v) {
-  return /^https?:\/\/\S+$/i.test(String(v ?? "").trim());
+// Model catalog reads have no original Request URL establishing credential
+// scope; inference rewrites use this only when changing origin. Keep site and
+// billing headers independent, and never mutate a saved/custom header block.
+function stripOriginCredentials(headers) {
+  const clean = new Headers(headers);
+  for (const name of ["Cookie", "Cookie2", "Proxy-Authorization", "New-Api-User"]) clean.delete(name);
+  return clean;
 }
 
-// apiBase is the base completions go to. It follows the account's own
-// endpoint when it gave one, and otherwise the endpoint this plugin was built
-// for — never the check-in site, so picking ps.air-outer.com for the check-in
-// doesn't quietly move requests off agentrouter.org.
-//
-// A stored endpoint that isn't a URL is ignored rather than used: the
-// request then still goes to the vendor, which is what the account wanted
-// when it pasted a key there.
-function apiBase(provider, auth) {
-  const said = String(meta(auth, "endpoint") ?? provider?.endpoint ?? "").trim();
-  if (isURLish(said)) return `${said.replace(/\/+$/, "")}/v1`;
-  const base = String(meta(auth, "apiBase") ?? "").trim();
-  if (base) return base.replace(/\/+$/, "");
-  return `${ENDPOINT}/v1`;
+function isURLish(v) {
+  return isApiURL(v);
+}
+
+// Inference and model catalog calls pass their live boolean selection here.
+// Explicit account/provider endpoint, then apiBase, take precedence. Billing
+// calls omit it, keeping their original international fallback independent of
+// the inference switch; OAuth, balance and check-in still use siteBase.
+function apiBase(provider, auth, useDomesticApi = false) {
+  return resolveApiBase({ endpoint: meta(auth, "endpoint"), apiBase: meta(auth, "apiBase") }, provider, useDomesticApi);
 }
 
 // siteBase is where the site's own web routes are: the balance and the
@@ -894,7 +885,7 @@ function declaredModels() {
 
 // modelsOf asks the vendor for the models this account has. It is the same
 // list every agent sees, and the vendor keeps it current.
-async function modelsOf(provider, { auth } = {}) {
+async function modelsOf(provider, { auth } = {}, useDomesticApi = true) {
   // The fallback is this plugin's own list, never the row's: the row may
   // still carry models a cached models.dev catalog gave it, and handing those
   // back would advertise models the site no longer serves.
@@ -903,8 +894,8 @@ async function modelsOf(provider, { auth } = {}) {
   const key = apiKey(auth);
   if (!key) return fallback;
   try {
-    const res = await fetch(`${apiBase(provider, auth)}/models`, {
-      headers: applyHeaders(new Headers(), { ...headersOf(provider, auth), Authorization: `Bearer ${key}` }),
+    const res = await fetch(`${apiBase(provider, auth, useDomesticApi)}/models`, {
+      headers: stripOriginCredentials(applyHeaders(new Headers(), { ...headersOf(provider, auth), Authorization: `Bearer ${key}` })),
       signal: withTimeout(REQUEST_TIMEOUT),
     });
     const { json } = await jsonOrText(res);
@@ -937,6 +928,9 @@ export const AgentRouterAuthPlugin = async (input) => {
   // 请求头"). Reading it through a closure keeps headersOf's own signature —
   // provider and account — which every caller already passes.
   codexHeaders = () => input?.magpie?.option?.(PROVIDER, "send-codex-headers") !== false;
+  // Per-instance readers avoid global endpoint state. SDK/model caches may keep
+  // a baseURL, but every new fetch snapshots this switch before body inspection.
+  const useDomesticApi = () => input?.magpie?.option?.(PROVIDER, "use-domestic-api") !== false;
   const portableResponses = () => input?.magpie?.option?.(PROVIDER, "portable-responses") !== false;
   const textFilterEnabled = () => input?.magpie?.option?.(PROVIDER, "text-filter") !== false;
   return {
@@ -952,7 +946,7 @@ export const AgentRouterAuthPlugin = async (input) => {
       cfg.provider[PROVIDER] ??= {
         name: "AgentRouter",
         npm: "@ai-sdk/openai",
-        api: `${ENDPOINT}/v1`,
+        api: apiBase({}, {}, useDomesticApi()),
         models: declaredModels(),
       };
     },
@@ -1034,7 +1028,7 @@ export const AgentRouterAuthPlugin = async (input) => {
       async loader(getAuth, provider) {
         const auth = (await getAuth()) ?? {};
         const textFilter = textFilterEnabled() ? await loadTextFilter() : null;
-        const base = apiBase(provider, auth);
+        const base = apiBase(provider, auth, useDomesticApi());
         return {
           baseURL: base,
           apiKey: apiKey(auth) || "agentrouter",
@@ -1047,16 +1041,42 @@ export const AgentRouterAuthPlugin = async (input) => {
                 message: "尚未配置模型 API Key，请使用 API Key 入口补充。系统访问令牌和 GitHub Cookie 不能用于模型调用。",
               } }, { status: 400 });
             }
+            let requestURL;
+            try {
+              const selected = apiBase(provider, auth, useDomesticApi());
+              requestURL = routeApiURL(input, selected, base);
+            } catch (error) {
+              return Response.json({ error: {
+                type: "invalid_request_error",
+                code: error.code ?? "agentrouter_invalid_endpoint",
+                message: "AgentRouter：API 配置或模型请求地址无效，未发送请求或凭据。请检查 endpoint/apiBase 与国内 API 开关。",
+              } }, { status: 400 });
+            }
             const h = new Headers(input instanceof Request ? input.headers : undefined);
             new Headers(init.headers ?? {}).forEach((v, k) => h.set(k, v));
             applyHeaders(h, headersOf(provider, auth));
             if (key) h.set("Authorization", `Bearer ${key}`);
+            const originalURL = new URL(input instanceof Request ? input.url : input);
+            const crossOrigin = originalURL.origin !== new URL(requestURL).origin;
             const requestInit = { ...init, headers: h };
             const prepared = await prepareRequest(input, requestInit, {
               portableResponses: portableResponses(),
               textFilter: textFilterEnabled() ? textFilter : null,
             });
-            return explainResponse(await fetch(input, prepared));
+            // Preparation may merge the original Request's headers again. Drop
+            // origin-scoped credentials at the final send seam, not before that
+            // merge, so neither replay nor filtering can reintroduce a Cookie.
+            const sendHeaders = crossOrigin ? stripOriginCredentials(prepared.headers) : new Headers(prepared.headers);
+            let routed;
+            try {
+              routed = requestAtURL(input, { ...prepared, headers: sendHeaders }, requestURL);
+            } catch (error) {
+              if (!(error instanceof UnsupportedRequestTransportError)) throw error;
+              return Response.json({ error: {
+                type: "invalid_request_error", code: error.code, message: error.message,
+              } }, { status: 400 });
+            }
+            return explainResponse(await fetch(routed.input, routed.init));
           },
         };
       },
@@ -1066,6 +1086,12 @@ export const AgentRouterAuthPlugin = async (input) => {
 
       // Switches the user can turn on the provider's editor.
       options: [
+        {
+          key: "use-domestic-api",
+          label: "国内 API（开启：ps.air-outer.com；关闭：国际 agentrouter.org）",
+          description: "默认开启；下一次模型请求及模型列表读取生效，进行中的请求不切换。高级 endpoint（账号优先于供应商）优先于 apiBase，再优先于此开关；清除显式地址后才使用开关。账号站点、余额和签到不随此开关改变。",
+          default: true,
+        },
         {
           key: "text-filter",
           label: "Filter configured prose before sending",
@@ -1090,7 +1116,7 @@ export const AgentRouterAuthPlugin = async (input) => {
 
     provider: {
       id: PROVIDER,
-      models: modelsOf,
+      models: (provider, context) => modelsOf(provider, context, useDomesticApi()),
     },
 
     // A conversation's turns reach the vendor under one id, so its cache sees

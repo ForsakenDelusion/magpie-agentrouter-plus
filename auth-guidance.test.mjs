@@ -43,6 +43,19 @@ test("first login has no optional settings or duplicate API key input", async ()
   assert.match(prompts[0].message, /不是模型 API Key/);
 });
 
+test("provider exposes only independent boolean switches with an explicit domestic default", async () => {
+  const p = await plugin({ magpie: {} });
+  assert.equal(p.auth.provider, "agentrouter");
+  assert.equal(p.provider.id, "agentrouter");
+  assert.deepEqual(p.auth.options.map(option => option.key), ["use-domestic-api", "text-filter", "portable-responses", "send-codex-headers"]);
+  assert.ok(p.auth.options.every(option => typeof option.default === "boolean"));
+  const option = p.auth.options.find(option => option.key === "use-domestic-api");
+  assert.equal(option.default, true);
+  assert.match(option.label, /开启.*ps\.air-outer\.com.*关闭.*国际.*agentrouter\.org/);
+  for (const phrase of ["下一次", "进行中", "endpoint", "apiBase", "账号站点", "签到"]) assert.ok(option.description.includes(phrase));
+  assert.deepEqual(methodOf(p, "api").prompts ?? [], []);
+});
+
 test("API finalization is local and leaves the host as sole key owner", async () => {
   const method = methodOf(await plugin({ magpie: {} }), "api");
   await stubFetch([], async calls => {

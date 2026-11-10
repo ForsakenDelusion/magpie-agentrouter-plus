@@ -8,7 +8,7 @@ import { Worker } from "node:worker_threads";
 import { createTextFilter, loadTextFilter, redactResponsesBody } from "./content-filter.mjs";
 import { prepareRequest } from "./request.mjs";
 
-const url = "https://example.test/v1/responses";
+const url = "https://agentrouter.org/v1/responses";
 const filter = () => createTextFilter({ terms: ["private-term", "内部词"] });
 async function directory(t) {
   const dir = await mkdtemp(join(tmpdir(), "agentrouter-filter-"));
@@ -227,7 +227,7 @@ test("request option combinations keep empty-logprobs filtering and replay indep
     const prepared = await prepareRequest(url, init, options);
     const text = textFilter ? "[FILTERED]" : "private-term";
     const expectedMessage = portableResponses
-      ? { type: "message", role: "assistant", phase: "commentary", content: [{ ...message.content[0], text }] }
+      ? { role: "assistant", phase: "commentary", content: text }
       : { ...message, content: [{ ...message.content[0], text }] };
     assert.deepEqual(JSON.parse(prepared.body), { input: [expectedMessage], store: !portableResponses }, label);
     if (!portableResponses && !textFilter) assert.equal(prepared, init, label);
@@ -235,7 +235,7 @@ test("request option combinations keep empty-logprobs filtering and replay indep
     assert.equal(JSON.parse(init.body).input[0].content[0].text, "private-term", label);
   }
   const defaults = JSON.parse((await prepareRequest(url, { method: "POST", body: JSON.stringify({ input: [message] }) }, { textFilter: filter() })).body);
-  assert.equal(defaults.input[0].content[0].text, "[FILTERED]");
+  assert.equal(defaults.input[0].content, "[FILTERED]");
   assert.equal(defaults.input[0].id, undefined);
   assert.equal(defaults.store, false);
 });
@@ -272,13 +272,13 @@ test("cloned Request filtering preserves the original stream", async () => {
 test("filtering and inline replay compose without dropping call IDs or changing opaque reasoning", async () => {
   const body = { input: [{ type: "message", role: "assistant", id: "msg_old", content: [{ type: "output_text", text: "private-term", annotations: [] }] }, { type: "reasoning", id: "rs_old", encrypted_content: "private-term", summary: [] }] };
   const result = JSON.parse((await prepareRequest(url, { method: "POST", body: JSON.stringify(body) }, { textFilter: filter() })).body);
-  assert.equal(result.input[0].id, undefined); assert.equal(result.input[0].content[0].text, "[FILTERED]");
+  assert.equal(result.input[0].id, undefined); assert.equal(result.input[0].content, "[FILTERED]");
   assert.equal(result.store, false); assert.deepEqual(result.input[1], body.input[1]);
 });
 
 test("installed loader honors all independent options and their enabled defaults", async t => {
   const dir = await directory(t);
-  for (const name of ["index.mjs", "request.mjs", "body-inspection.mjs", "response.mjs", "content-filter.mjs", "github-cookie.mjs"]) {
+  for (const name of ["index.mjs", "endpoints.mjs", "request.mjs", "body-inspection.mjs", "response.mjs", "content-filter.mjs", "github-cookie.mjs"]) {
     await copyFile(new URL(name, import.meta.url), join(dir, name));
   }
   await writeFile(join(dir, "content-filter.local.json"), JSON.stringify({ terms: ["private-term"] }));
@@ -310,7 +310,7 @@ test("installed loader honors all independent options and their enabled defaults
     const text = current["text-filter"] === false ? "private-term" : "[FILTERED]";
     const expectedMessage = current["portable-responses"] === false
       ? { ...message, content: [{ ...message.content[0], text }] }
-      : { type: "message", role: "assistant", content: [{ ...message.content[0], text }] };
+      : { role: "assistant", content: text };
     assert.deepEqual(JSON.parse(sent[count].body), { input: [expectedMessage], store: current["portable-responses"] === false }, label);
     if (current["portable-responses"] === false && current["text-filter"] === false) assert.equal(sent[count].body, init.body);
     assert.equal(JSON.parse(init.body).input[0].content[0].text, "private-term", label);
@@ -319,7 +319,7 @@ test("installed loader honors all independent options and their enabled defaults
 
 test("installed loader reads private rules, supports the off switch and never retries a blocked request", async t => {
   const dir = await directory(t);
-  for (const file of ["index.mjs", "request.mjs", "body-inspection.mjs", "response.mjs", "content-filter.mjs", "github-cookie.mjs"]) await copyFile(new URL(file, import.meta.url), join(dir, file));
+  for (const file of ["index.mjs", "endpoints.mjs", "request.mjs", "body-inspection.mjs", "response.mjs", "content-filter.mjs", "github-cookie.mjs"]) await copyFile(new URL(file, import.meta.url), join(dir, file));
   await writeFile(join(dir, "content-filter.local.json"), JSON.stringify({ terms: ["private-term"] }));
   const plugin = (await import(pathToFileURL(join(dir, "index.mjs")).href)).default;
   const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });

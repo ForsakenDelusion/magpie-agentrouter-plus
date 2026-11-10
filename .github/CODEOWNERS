@@ -1,7 +1,14 @@
-# Workflow and security-sensitive changes require maintainer review.
-* @ZhaoJun233
-/.github/ @ZhaoJun233
-/request.mjs @ZhaoJun233
-/session.mjs @ZhaoJun233
-/github-cookie.mjs @ZhaoJun233
-/content-filter.mjs @ZhaoJun233
+# Maintainer ownership for this fork; review enforcement depends on repository rules.
+* @ForsakenDelusion
+/.github/ @ForsakenDelusion
+/index.mjs @ForsakenDelusion
+/endpoints.mjs @ForsakenDelusion
+/request.mjs @ForsakenDelusion
+/response.mjs @ForsakenDelusion
+/body-inspection.mjs @ForsakenDelusion
+/github-cookie.mjs @ForsakenDelusion
+/content-filter.mjs @ForsakenDelusion
+/local-checkin.mjs @ForsakenDelusion
+/windows-acl.mjs @ForsakenDelusion
+/SECURITY.md @ForsakenDelusion
+/UPSTREAM.md @ForsakenDelusion
